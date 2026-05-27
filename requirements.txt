@@ -1,7 +1,6 @@
 streamlit
 pandas
 plotly
+sqlalchemy
+pyodbc
 python-dotenv
-matplotlib
-python-tds
-azure-identity
