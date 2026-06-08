@@ -2,6 +2,7 @@ import os
 import pandas as pd
 import streamlit as st
 import pytds
+from pytds.login import AzureADPasswordAuth
 from azure.identity import ClientSecretCredential
 from dotenv import load_dotenv
 
@@ -18,10 +19,17 @@ def _cfg(key):
     return os.getenv(key)
 
 
-class _ServicePrincipalAuth:
-    """FedAuth token handler for pytds using azure-identity service principal."""
+class _ServicePrincipalAuth(AzureADPasswordAuth):
+    """
+    Subclasses AzureADPasswordAuth so pytds recognises it during isinstance
+    checks and sets the FedAuth flag in the prelogin packet, but overrides
+    create_packet() to use the client-credentials OAuth flow instead of
+    the resource-owner-password flow.
+    """
 
     def __init__(self, tenant_id, client_id, client_secret):
+        # Do NOT call super().__init__() — it expects a user/password for the
+        # AAD password flow, which doesn't apply to service principals.
         self._credential = ClientSecretCredential(
             tenant_id=tenant_id,
             client_id=client_id,
@@ -33,10 +41,6 @@ class _ServicePrincipalAuth:
             "https://database.windows.net/.default"
         ).token
         return token.encode("utf-16-le")
-
-    @property
-    def fedauthrequired(self):
-        return True
 
 
 def load_data():
