@@ -32,9 +32,19 @@ def _get_token_struct():
     return struct.pack(f"<I{len(token_bytes)}s", len(token_bytes), token_bytes)
 
 
+def _get_driver():
+    available = [d for d in pyodbc.drivers() if "SQL Server" in d]
+    for preferred in ("ODBC Driver 18 for SQL Server", "ODBC Driver 17 for SQL Server"):
+        if preferred in available:
+            return preferred
+    if available:
+        return available[0]
+    raise RuntimeError(f"No SQL Server ODBC driver found. Installed drivers: {pyodbc.drivers()}")
+
+
 def load_data():
     conn_str = (
-        "DRIVER={ODBC Driver 18 for SQL Server};"
+        f"DRIVER={{{_get_driver()}}};"
         f"SERVER={_cfg('SERVER')},1433;"
         f"DATABASE={_cfg('DATABASE')};"
         "Encrypt=yes;"
