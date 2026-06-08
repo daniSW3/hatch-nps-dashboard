@@ -1,7 +1,8 @@
 import os
-import urllib.parse
 import pandas as pd
 import streamlit as st
+import pytds
+from azure.identity import ClientSecretCredential
 from sqlalchemy import create_engine
 from dotenv import load_dotenv
 
@@ -19,22 +20,19 @@ def _cfg(key):
 
 
 def get_engine():
-    client_id = urllib.parse.quote_plus(_cfg("CLIENT_ID"))
-    client_secret = urllib.parse.quote_plus(_cfg("CLIENT_SECRET"))
+    credential = ClientSecretCredential(
+        tenant_id=_cfg("TENANT_ID"),
+        client_id=_cfg("CLIENT_ID"),
+        client_secret=_cfg("CLIENT_SECRET"),
+    )
     server = _cfg("SERVER")
     database = _cfg("DATABASE")
-    tenant_id = _cfg("TENANT_ID")
 
-    conn_str = (
-        f"mssql+pyodbc://{client_id}:{client_secret}"
-        f"@{server}:1433/{database}"
-        f"?driver=ODBC+Driver+18+for+SQL+Server"
-        f"&authentication=ActiveDirectoryServicePrincipal"
-        f"&tenant_id={tenant_id}"
-        f"&Encrypt=yes"
-        f"&TrustServerCertificate=no"
-    )
-    return create_engine(conn_str, echo=False)
+    def connect():
+        token = credential.get_token("https://database.windows.net/.default").token
+        return pytds.connect(dsn=server, database=database, access_token=token)
+
+    return create_engine("mssql+pytds://", creator=connect)
 
 
 def load_data():
