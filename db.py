@@ -18,13 +18,33 @@ def _cfg(key):
     return os.getenv(key)
 
 
+class _ServicePrincipalAuth:
+    """FedAuth token handler for pytds using azure-identity service principal."""
+
+    def __init__(self, tenant_id, client_id, client_secret):
+        self._credential = ClientSecretCredential(
+            tenant_id=tenant_id,
+            client_id=client_id,
+            client_secret=client_secret,
+        )
+
+    def create_packet(self):
+        token = self._credential.get_token(
+            "https://database.windows.net/.default"
+        ).token
+        return token.encode("utf-16-le")
+
+    @property
+    def fedauthrequired(self):
+        return True
+
+
 def load_data():
-    credential = ClientSecretCredential(
+    auth = _ServicePrincipalAuth(
         tenant_id=_cfg("TENANT_ID"),
         client_id=_cfg("CLIENT_ID"),
         client_secret=_cfg("CLIENT_SECRET"),
     )
-    token = credential.get_token("https://database.windows.net/.default").token
 
     query = """
     SELECT
@@ -45,7 +65,7 @@ def load_data():
     with pytds.connect(
         dsn=_cfg("SERVER"),
         database=_cfg("DATABASE"),
-        access_token=token,
+        auth=auth,
     ) as conn:
         df = pd.read_sql(query, conn)
 
