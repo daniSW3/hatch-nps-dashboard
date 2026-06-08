@@ -3,5 +3,5 @@ pandas
 plotly
 python-dotenv
 matplotlib
-python-tds
+pyodbc
 azure-identity

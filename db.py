@@ -1,12 +1,14 @@
 import os
+import struct
 import pandas as pd
 import streamlit as st
-import pytds
-from pytds.login import AzureADPasswordAuth
+import pyodbc
 from azure.identity import ClientSecretCredential
 from dotenv import load_dotenv
 
 load_dotenv()
+
+SQL_COPT_SS_ACCESS_TOKEN = 1256
 
 
 def _cfg(key):
@@ -19,35 +21,24 @@ def _cfg(key):
     return os.getenv(key)
 
 
-class _ServicePrincipalAuth(AzureADPasswordAuth):
-    """
-    Subclasses AzureADPasswordAuth so pytds recognises it during isinstance
-    checks and sets the FedAuth flag in the prelogin packet, but overrides
-    create_packet() to use the client-credentials OAuth flow instead of
-    the resource-owner-password flow.
-    """
-
-    def __init__(self, tenant_id, client_id, client_secret):
-        # Do NOT call super().__init__() — it expects a user/password for the
-        # AAD password flow, which doesn't apply to service principals.
-        self._credential = ClientSecretCredential(
-            tenant_id=tenant_id,
-            client_id=client_id,
-            client_secret=client_secret,
-        )
-
-    def create_packet(self):
-        token = self._credential.get_token(
-            "https://database.windows.net/.default"
-        ).token
-        return token.encode("utf-16-le")
-
-
-def load_data():
-    auth = _ServicePrincipalAuth(
+def _get_token_struct():
+    credential = ClientSecretCredential(
         tenant_id=_cfg("TENANT_ID"),
         client_id=_cfg("CLIENT_ID"),
         client_secret=_cfg("CLIENT_SECRET"),
+    )
+    token = credential.get_token("https://database.windows.net/.default").token
+    token_bytes = token.encode("UTF-16-LE")
+    return struct.pack(f"<I{len(token_bytes)}s", len(token_bytes), token_bytes)
+
+
+def load_data():
+    conn_str = (
+        "DRIVER={ODBC Driver 18 for SQL Server};"
+        f"SERVER={_cfg('SERVER')},1433;"
+        f"DATABASE={_cfg('DATABASE')};"
+        "Encrypt=yes;"
+        "TrustServerCertificate=no;"
     )
 
     query = """
@@ -66,10 +57,8 @@ def load_data():
     WHERE created_date IS NOT NULL
     """
 
-    with pytds.connect(
-        dsn=_cfg("SERVER"),
-        database=_cfg("DATABASE"),
-        auth=auth,
+    with pyodbc.connect(
+        conn_str, attrs_before={SQL_COPT_SS_ACCESS_TOKEN: _get_token_struct()}
     ) as conn:
         df = pd.read_sql(query, conn)
 
