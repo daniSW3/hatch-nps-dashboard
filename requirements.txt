@@ -1,7 +1,6 @@
 streamlit
 pandas
 plotly
-sqlalchemy
 python-dotenv
 matplotlib
 python-tds

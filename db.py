@@ -3,7 +3,6 @@ import pandas as pd
 import streamlit as st
 import pytds
 from azure.identity import ClientSecretCredential
-from sqlalchemy import create_engine
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -19,25 +18,13 @@ def _cfg(key):
     return os.getenv(key)
 
 
-def get_engine():
+def load_data():
     credential = ClientSecretCredential(
         tenant_id=_cfg("TENANT_ID"),
         client_id=_cfg("CLIENT_ID"),
         client_secret=_cfg("CLIENT_SECRET"),
     )
-    server = _cfg("SERVER")
-    database = _cfg("DATABASE")
-
-    def connect():
-        token = credential.get_token("https://database.windows.net/.default").token
-        return pytds.connect(dsn=server, database=database, access_token=token)
-
-    return create_engine("mssql+pytds://", creator=connect)
-
-
-def load_data():
-    """Load data from the view"""
-    engine = get_engine()
+    token = credential.get_token("https://database.windows.net/.default").token
 
     query = """
     SELECT
@@ -55,7 +42,12 @@ def load_data():
     WHERE created_date IS NOT NULL
     """
 
-    df = pd.read_sql(query, engine)
+    with pytds.connect(
+        dsn=_cfg("SERVER"),
+        database=_cfg("DATABASE"),
+        access_token=token,
+    ) as conn:
+        df = pd.read_sql(query, conn)
 
     # Data Cleaning
     df['created_date'] = pd.to_datetime(df['created_date'])
