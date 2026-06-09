@@ -28,7 +28,7 @@ def _pytds_auth_debug():
         if any(k in x.lower() for k in ("azure", "ad", "auth", "fed", "token"))
     ]
     raise RuntimeError(
-        f"pytds version: {pytds.__version__}\n"
+        f"pytds version: {getattr(pytds, '__version__', 'unknown')}\n"
         f"pytds.login exports: {login_exports}\n"
         f"Azure/auth candidates: {azure_candidates}"
     )
