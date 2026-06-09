@@ -6,7 +6,7 @@ from db import load_data
 st.set_page_config(page_title="NPS Dashboard — Multi-Market", layout="wide", page_icon="📊")
 
 st.title("📊 Agent NPS Dashboard — Multi-Market")
-st.markdown("**Weeks 1–20** | Hatch Africa • Internal Use Only")
+st.markdown("**Weeks 1–** | Hatch Africa • Internal Use Only")
 
 # ====================== LOAD DATA ======================
 @st.cache_data(ttl=21600)

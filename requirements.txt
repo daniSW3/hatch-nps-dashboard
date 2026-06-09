@@ -1,6 +1,9 @@
 streamlit
 pandas
 plotly
-sqlalchemy
-pyodbc
 python-dotenv
+matplotlib
+python-tds
+azure-identity
+certifi
+pyOpenSSL<25
