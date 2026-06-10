@@ -1,17 +1,29 @@
 import os
+from urllib.parse import quote_plus
+
 import pandas as pd
 from sqlalchemy import create_engine
 from dotenv import load_dotenv
 
 load_dotenv()
 
+def _get_setting(key):
+    """Read from Streamlit secrets (cloud) first, then environment (.env locally)."""
+    try:
+        import streamlit as st
+        if key in st.secrets:
+            return st.secrets[key]
+    except Exception:
+        pass
+    return os.getenv(key)
+
 def get_engine():
     conn_str = (
-        f"mssql+pyodbc://{os.getenv('CLIENT_ID')}:{os.getenv('CLIENT_SECRET')}"
-        f"@{os.getenv('SERVER')}:1433/{os.getenv('DATABASE')}"
+        f"mssql+pyodbc://{quote_plus(_get_setting('AZURE_CLIENT_ID'))}:{quote_plus(_get_setting('AZURE_CLIENT_SECRET'))}"
+        f"@{_get_setting('DB_SERVER')}:1433/{_get_setting('DB_DATABASE')}"
         f"?driver=ODBC+Driver+17+for+SQL+Server"
         f"&authentication=ActiveDirectoryServicePrincipal"
-        f"&tenant_id={os.getenv('TENANT_ID')}"
+        f"&tenant_id={_get_setting('AZURE_TENANT_ID')}"
         f"&Encrypt=yes"
         f"&TrustServerCertificate=no"
     )

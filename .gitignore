@@ -2,3 +2,9 @@ __pycache__/
 venv/
 .env
 .DS_Store
+*.pyc
+.vscode/
+.claude/
+deploy.zip
+.deployment
+streamlit.sh

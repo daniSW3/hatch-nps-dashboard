@@ -7,3 +7,5 @@ python-tds
 azure-identity
 certifi
 pyOpenSSL<25
+sqlalchemy
+pyodbc
