@@ -1,0 +1,7 @@
+[theme]
+base = "dark"
+primaryColor = "#E65100"          # Hatch Africa orange (brand accent)
+backgroundColor = "#1a1a18"       # warm dark (dark twin of the report's #f5f4f0)
+secondaryBackgroundColor = "#242422"  # panels / sidebar (dark twin of #fff cards)
+textColor = "#e8e6e0"
+font = "sans serif"
