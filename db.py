@@ -1,62 +1,74 @@
 import os
+
+import certifi
 import pandas as pd
-from sqlalchemy import create_engine
+import pytds
+from azure.identity import ClientSecretCredential
 from dotenv import load_dotenv
 
-# Load .env file and show debug info
 load_dotenv()
 
+_SQL_SCOPE = "https://database.windows.net/.default"
+
+REQUIRED_KEYS = [
+    "DB_SERVER",
+    "DB_DATABASE",
+    "AZURE_TENANT_ID",
+    "AZURE_CLIENT_ID",
+    "AZURE_CLIENT_SECRET",
+]
+
+
+def _cfg(key):
+    """Streamlit secrets first (cloud), then environment / .env (local)."""
+    try:
+        import streamlit as st
+        if key in st.secrets:
+            return st.secrets[key]
+    except Exception:
+        pass
+    return os.getenv(key)
+
+
 def debug_env():
-    """Helper to debug environment variables"""
+    """Masked check of required config (safe to print)."""
     print("Current Working Directory:", os.getcwd())
-    print(".env file exists:", os.path.exists('.env'))
-    
-    required_vars = ['DB_SERVER', 'DB_DATABASE', 'AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET', 'AZURE_TENANT_ID']
-    for var in required_vars:
-        value = os.getenv(var)
-        print(f"{var}: {'***SET***' if value else 'MISSING'}")
+    print(".env file exists:", os.path.exists(".env"))
+    for var in REQUIRED_KEYS:
+        print(f"{var}: {'***SET***' if _cfg(var) else 'MISSING'}")
 
-def get_engine():
-    required = {
-        'SERVER': os.getenv('DB_SERVER'),
-        'DATABASE': os.getenv('DB_DATABASE'),
-        'CLIENT_ID': os.getenv('AZURE_CLIENT_ID'),
-        'CLIENT_SECRET': os.getenv('AZURE_CLIENT_SECRET'),
-        'TENANT_ID': os.getenv('AZURE_TENANT_ID')
-    }
 
-    missing = [k for k, v in required.items() if not v]
+def _check_config():
+    missing = [k for k in REQUIRED_KEYS if not _cfg(k)]
     if missing:
         raise Exception(
-            f"❌ Missing environment variables: {', '.join(missing)}\n\n"
-            f"Please make sure your .env file exists in the project root and contains all these variables."
+            f"Missing configuration: {', '.join(missing)}. "
+            "Set these in Streamlit secrets (cloud) or your .env file (local)."
         )
 
-    conn_str = (
-        f"mssql+pyodbc://{required['CLIENT_ID']}:{required['CLIENT_SECRET']}"
-        f"@{required['SERVER']}:1433/{required['DATABASE']}"
-        f"?driver=ODBC+Driver+17+for+SQL+Server"
-        f"&authentication=ActiveDirectoryServicePrincipal"
-        f"&tenant_id={required['TENANT_ID']}"
-        f"&Encrypt=yes"
-        f"&TrustServerCertificate=yes"
-        f"&timeout=60"
-        f"&connect_timeout=60"
-    )
 
-    return create_engine(
-        conn_str,
-        echo=False,
-        pool_pre_ping=True,
-        pool_timeout=60,
-        pool_recycle=1800
+def _get_token() -> str:
+    credential = ClientSecretCredential(
+        tenant_id=_cfg("AZURE_TENANT_ID"),
+        client_id=_cfg("AZURE_CLIENT_ID"),
+        client_secret=_cfg("AZURE_CLIENT_SECRET"),
     )
+    return credential.get_token(_SQL_SCOPE).token
 
 
 def load_data():
-    """Load data from the view"""
+    """Load data from the view."""
     try:
-        engine = get_engine()
+        _check_config()
+
+        conn = pytds.connect(
+            server=_cfg("DB_SERVER"),
+            database=_cfg("DB_DATABASE"),
+            access_token_callable=_get_token,
+            cafile=certifi.where(),   # proper TLS validation (no TrustServerCertificate=yes)
+            port=1433,
+            login_timeout=60,
+        )
 
         query = """
         SELECT
@@ -66,9 +78,15 @@ def load_data():
         WHERE created_date IS NOT NULL
         """
 
-        df = pd.read_sql(query, engine)
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(query)
+                cols = [c[0] for c in cur.description]
+                rows = cur.fetchall()
 
-        # Data processing
+        df = pd.DataFrame(rows, columns=cols)
+
+        # Data processing (unchanged)
         df['created_date'] = pd.to_datetime(df['created_date'], errors='coerce')
         df['week'] = 'W' + df['created_date'].dt.strftime('%U')
         df['month'] = df['created_date'].dt.strftime('%Y-%m')
@@ -84,7 +102,7 @@ def load_data():
                     return 'Passive'
                 else:
                     return 'Detractor'
-            except:
+            except Exception:
                 return 'Unknown'
 
         df['NPS_Group'] = df['Rating'].apply(get_nps_group)
