@@ -66,6 +66,7 @@ st.markdown("""
 .hatch-footer {position:fixed; left:0; right:0; bottom:0; background:#20201e; border-top:1px solid #3a3a36;
                padding:10px 24px; display:flex; justify-content:space-between; font-size:11px; color:#888780; z-index:99;}
 .hatch-footer .formula {color:#b4b2a9; font-weight:500;}
+.drill-hint {font-size:12px; color:#888780; margin:8px 0 4px;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -78,25 +79,74 @@ def get_data():
 
 df = get_data()
 
-# ====================== FILTERS ======================
+# ====================== COLUMN NORMALISATION ======================
+# View returns: customer, country, created_date, Rating, Reason, Sr_Name, ASM,
+# RSM, Region_Name, dispatch_date. Older code expected 'region'; the drill-down
+# needs stable, friendly names. Normalise once here.
+def _first_col(frame, *candidates):
+    lower = {c.lower(): c for c in frame.columns}
+    for cand in candidates:
+        if cand in frame.columns:
+            return cand
+        if cand.lower() in lower:
+            return lower[cand.lower()]
+    return None
+
+_region_src = _first_col(df, "region", "Region_Name", "region_name", "Region")
+if _region_src and _region_src != "region":
+    df["region"] = df[_region_src]
+elif _region_src is None:
+    df["region"] = ""
+
+# columns the drill-down modal displays (map friendly label -> source column)
+_MODAL_SRC = {
+    "Customer ID":   _first_col(df, "Customer ID", "customer", "customer_id", "id"),
+    "SR name":       _first_col(df, "SR name", "Sr_Name", "sr_name", "sr", "SR"),
+    "ASM name":      _first_col(df, "ASM name", "ASM", "asm"),
+    "RSM":           _first_col(df, "RSM", "rsm"),
+    "Region":        "region",
+    "Dispatch date": _first_col(df, "Dispatch date", "dispatch_date", "dispatch_Date"),
+    "If Other":      _first_col(df, "If Other", "If_Other", "if_other", "ifother", "IfOther"),
+}
+
+# ====================== DERIVED PERIOD FIELDS ======================
+df['created_date'] = pd.to_datetime(df['created_date'], errors='coerce')
 df['week'] = df['created_date'].dt.strftime('%Y-W-%U')
 df['month'] = df['created_date'].dt.strftime('%b-%y')
-
-st.sidebar.header("🔍 Filters")
 df['year'] = df['created_date'].dt.year
 
-years = sorted(df['year'].unique())
-selected_years = st.sidebar.multiselect("Year", years, default=[max(years)])
+# ====================== FILTERS ======================
+st.sidebar.header("🔍 Filters")
+
+years = sorted(df['year'].dropna().unique())
+selected_years = st.sidebar.multiselect("Year", years, default=[max(years)] if years else [])
 base = df[df['year'].isin(selected_years)] if selected_years else df
 
 mode = st.sidebar.radio("View by:", ["Weeks", "Months"], horizontal=True)
+
 if mode == "Weeks":
-    all_weeks = sorted(base['week'].unique())
-    selected_weeks = st.sidebar.multiselect("Select Weeks", all_weeks, default=all_weeks[-8:])
+    all_weeks = sorted(base['week'].dropna().unique())
+    last8 = all_weeks[-8:]
+
+    # ---- quick presets (Last 8 weeks / All weeks) ----
+    st.sidebar.markdown('<div class="drill-hint">Quick select</div>', unsafe_allow_html=True)
+    p1, p2 = st.sidebar.columns(2)
+    if p1.button("Last 8 weeks", use_container_width=True):
+        st.session_state["sel_weeks"] = last8
+    if p2.button("All weeks", use_container_width=True):
+        st.session_state["sel_weeks"] = list(all_weeks)
+
+    # default = Last 8; keep stored selection valid as available weeks change
+    if "sel_weeks" not in st.session_state:
+        st.session_state["sel_weeks"] = last8
+    valid = [w for w in st.session_state["sel_weeks"] if w in all_weeks]
+    st.session_state["sel_weeks"] = valid if valid else last8
+
+    selected_weeks = st.sidebar.multiselect("Select Weeks", all_weeks, key="sel_weeks")
     if selected_weeks:
         base = base[base['week'].isin(selected_weeks)]
 else:
-    all_months = base.sort_values('created_date')['month'].unique().tolist()
+    all_months = base.sort_values('created_date')['month'].dropna().unique().tolist()
     selected_months = st.sidebar.multiselect("Select Months", all_months, default=all_months[-4:])
     if selected_months:
         base = base[base['month'].isin(selected_months)]
@@ -106,7 +156,7 @@ selected_countries = st.sidebar.multiselect("Markets", countries, default=countr
 if selected_countries:
     base = base[base['country'].isin(selected_countries)]
 
-regions = sorted(base['region'].dropna().unique())
+regions = sorted([r for r in base['region'].dropna().unique() if str(r) != ""])
 selected_regions = st.sidebar.multiselect("Regions", regions, default=regions)
 if selected_regions:
     base = base[base['region'].isin(selected_regions)]
@@ -144,7 +194,6 @@ left, right = st.columns([6, 4])
 
 with left:
     st.subheader("Country comparison")
-    # caption: total calls + the periods in view (weeks or months)
     if mode == "Weeks":
         periods = sorted(filtered_df['week'].unique())
     else:
@@ -224,10 +273,13 @@ st.markdown("")
 
 # ====================== WoW CHART ======================
 st.subheader("NPS Movement — Week on Week")
-weekly_nps = filtered_df.groupby(['week', 'country']).apply(
-    lambda x: round(((x['NPS_Group'] == 'Promoter').sum() / len(x) * 100)
-                    - ((x['NPS_Group'] == 'Detractor').sum() / len(x) * 100), 1) if len(x) > 0 else 0
-).reset_index(name='NPS')
+_wow = filtered_df.copy()
+_wow['is_prom'] = (_wow['NPS_Group'] == 'Promoter').astype(int)
+_wow['is_det'] = (_wow['NPS_Group'] == 'Detractor').astype(int)
+weekly_nps = _wow.groupby(['week', 'country'], as_index=False).agg(
+    prom=('is_prom', 'sum'), det=('is_det', 'sum'), tot=('NPS_Group', 'count'))
+weekly_nps['NPS'] = ((weekly_nps['prom'] / weekly_nps['tot']
+                      - weekly_nps['det'] / weekly_nps['tot']) * 100).round(1)
 weekly_nps = weekly_nps.sort_values('week')
 fig_wow = px.line(weekly_nps, x='week', y='NPS', color='country', markers=True, height=480)
 fig_wow.update_layout(
@@ -243,26 +295,112 @@ fig_wow.add_hline(y=NPS_TARGET, line_dash="dot", line_color=ORANGE_LT,
                   annotation_text="Target 50", annotation_font_color=ORANGE_LT)
 st.plotly_chart(fig_wow, use_container_width=True)
 
+# ====================== DRILL-DOWN MODAL ======================
+# Replica of the HTML modal: click a reason -> individual survey rows behind it,
+# with RSM / Region dropdowns, a search box, a live count and a sortable table
+# (st.dataframe columns sort on header click natively).
+GROUP_STYLE = {
+    'Promoter':  (GREEN,  "rgba(46,125,50,.25)"),
+    'Passive':   (ORANGE, "rgba(230,81,0,.22)"),
+    'Detractor': (RED,    "rgba(198,40,40,.25)"),
+}
+MODAL_COLS = ["Customer ID", "SR name", "ASM name", "RSM", "Region",
+              "Dispatch date", "Score", "Response", "If Other"]
+
+def _drill_frame(reason, group):
+    g = filtered_df[filtered_df['NPS_Group'] == group].copy()
+    mask = g['Reason'].fillna('').apply(
+        lambda s: reason in [x.strip() for x in str(s).split(',')])
+    return g[mask]
+
+def _build_display(sub):
+    out = pd.DataFrame()
+    for label in MODAL_COLS:
+        if label == "Score":
+            out["Score"] = pd.to_numeric(sub['Rating'], errors='coerce').astype('Int64')
+        elif label == "Response":
+            out["Response"] = sub['Reason'].fillna('')
+        else:
+            src = _MODAL_SRC.get(label)
+            if src and src in sub.columns:
+                col = sub[src]
+                if label == "Dispatch date":
+                    col = pd.to_datetime(col, errors='coerce').dt.strftime('%d %b %Y')
+                out[label] = col.fillna('') if hasattr(col, 'fillna') else col
+            else:
+                out[label] = ""
+    return out.reset_index(drop=True)
+
+# stable dialog API where available; fall back to the experimental one
+_dialog = getattr(st, "dialog", None) or getattr(st, "experimental_dialog", None)
+
+if _dialog is not None:
+    @_dialog("Reason drill-down", width="large")
+    def show_records(reason, group):
+        color, bg = GROUP_STYLE.get(group, (GREY, "rgba(155,154,148,.22)"))
+        sub = _drill_frame(reason, group)
+
+        st.markdown(
+            f'<div style="font-size:15px;font-weight:700;color:#e8e6e0;">"{reason}"</div>'
+            f'<div style="font-size:12px;color:#888780;margin-top:2px;">{len(sub):,} total '
+            f'&nbsp;·&nbsp;<span style="background:{bg};color:{color};padding:2px 10px;'
+            f'border-radius:99px;font-size:11px;font-weight:700;">{group}</span></div>',
+            unsafe_allow_html=True)
+
+        rsm_src = _MODAL_SRC.get("RSM")
+        rsms = sorted(sub[rsm_src].dropna().unique()) if rsm_src and rsm_src in sub.columns else []
+        regions_m = sorted([r for r in sub['region'].dropna().unique() if str(r) != ""])
+
+        f1, f2, f3 = st.columns([1, 1, 1.2])
+        sel_rsm = f1.selectbox("RSM", ["All RSMs"] + [str(x) for x in rsms], key=f"m_rsm_{group}_{reason}")
+        sel_reg = f2.selectbox("Region", ["All Regions"] + [str(x) for x in regions_m], key=f"m_reg_{group}_{reason}")
+        query = f3.text_input("Search customer, SR, ASM…", key=f"m_q_{group}_{reason}")
+
+        view = sub
+        if sel_rsm != "All RSMs" and rsm_src:
+            view = view[view[rsm_src].astype(str) == sel_rsm]
+        if sel_reg != "All Regions":
+            view = view[view['region'].astype(str) == sel_reg]
+        if query:
+            q = query.lower()
+            search_cols = [_MODAL_SRC.get(k) for k in ("Customer ID", "SR name", "ASM name")]
+            search_cols = [c for c in search_cols if c and c in view.columns] + ['region']
+            hay = view[search_cols].astype(str).agg(' '.join, axis=1).str.lower()
+            view = view[hay.str.contains(q, na=False)]
+
+        st.caption(f"{len(view):,} record{'s' if len(view) != 1 else ''} shown")
+
+        disp = _build_display(view)
+        st.dataframe(disp, use_container_width=True, hide_index=True, height=460)
+
+        if st.button("Close", key=f"m_close_{group}_{reason}"):
+            st.rerun()
+else:
+    show_records = None  # very old Streamlit
+
 # ====================== REASONS ANALYSIS (country matrix) ======================
 st.subheader("Reasons Analysis")
 
 def heat(color_rgb, pct):
-    # opacity scales with % (caps ~50%), matching the report's heat shading
     a = min(pct / 50, 1) * 0.40
     return f'background:rgba({color_rgb},{a:.3f});'
+
+def _reason_counts(group):
+    g = filtered_df[filtered_df['NPS_Group'] == group]
+    ex = g['Reason'].dropna().str.split(',').explode().str.strip()
+    ex = ex[ex != '']
+    return ex.value_counts()
 
 def reason_matrix(group, pill_cls, label, color_lt, color_rgb):
     g = filtered_df[filtered_df['NPS_Group'] == group].copy()
     cs = order_countries(g['country'].dropna().unique())
 
-    # explode reasons per row, keep country
     ex = g[['country', 'Reason']].copy()
     ex['Reason'] = ex['Reason'].str.split(',')
     ex = ex.explode('Reason')
     ex['Reason'] = ex['Reason'].str.strip()
     ex = ex[ex['Reason'].notna() & (ex['Reason'] != '')]
 
-    # counts per reason x country, and Hatch total
     pivot = ex.pivot_table(index='Reason', columns='country', values=None,
                            aggfunc='size', fill_value=0)
     if pivot.empty:
@@ -270,14 +408,12 @@ def reason_matrix(group, pill_cls, label, color_lt, color_rgb):
     pivot['__total__'] = pivot.sum(axis=1)
     pivot = pivot.sort_values('__total__', ascending=False)
 
-    col_totals = pivot.sum(axis=0)  # total mentions per column (denominator)
+    col_totals = pivot.sum(axis=0)
     hatch_total = col_totals['__total__']
 
-    # header
     head = '<th>Reason</th><th>Hatch Total</th>' + "".join(f'<th>{flag(c)}</th>' for c in cs)
     body = ""
     for reason, r in pivot.iterrows():
-        # Hatch total cell
         cnt_t = int(r['__total__']); p_t = cnt_t / hatch_total * 100 if hatch_total else 0
         cells = (f'<td style="{heat(color_rgb,p_t)}"><span class="pct" style="color:{color_lt}">{p_t:.0f}%</span>'
                  f'<span class="cnt">({cnt_t:,})</span></td>')
@@ -292,13 +428,33 @@ def reason_matrix(group, pill_cls, label, color_lt, color_rgb):
     return (f'<span class="rpill {pill_cls}">{label}</span>'
             f'<table class="mtbl"><tr>{head}</tr>{body}</table>')
 
+def reason_drill_buttons(group):
+    counts = _reason_counts(group)
+    if show_records is None:
+        st.info("Drill-down needs Streamlit ≥ 1.31 (st.dialog). Please upgrade streamlit.")
+        return
+    if counts.empty:
+        return
+    st.markdown('<div class="drill-hint">🔍 Click a reason to see the individual records behind it</div>',
+                unsafe_allow_html=True)
+    reasons = list(counts.index)
+    ncols = 3
+    cols = st.columns(ncols)
+    for i, reason in enumerate(reasons):
+        label = f"{reason}  ({int(counts[reason]):,})"
+        if cols[i % ncols].button(label, key=f"drill_{group}_{i}", use_container_width=True):
+            show_records(reason, group)
+
 tab_pro, tab_pas, tab_det = st.tabs(["Promoter Reasons", "Passive Reasons", "Detractor Reasons"])
 with tab_pro:
     st.markdown(reason_matrix('Promoter', 'rpill-pro', 'PROMOTER REASONS', GREEN_LT, "46,125,50"), unsafe_allow_html=True)
+    reason_drill_buttons('Promoter')
 with tab_pas:
     st.markdown(reason_matrix('Passive', 'rpill-pas', 'PASSIVE REASONS', GREY_LT, "120,120,116"), unsafe_allow_html=True)
+    reason_drill_buttons('Passive')
 with tab_det:
     st.markdown(reason_matrix('Detractor', 'rpill-det', 'DETRACTOR REASONS', RED_LT, "198,40,40"), unsafe_allow_html=True)
+    reason_drill_buttons('Detractor')
 
 # ====================== FOOTER ======================
 st.markdown('<div class="hatch-footer">'

@@ -71,11 +71,19 @@ def load_data():
         )
 
         query = """
-        SELECT
-            [id], [country], [created_date], [Rating], [Reason],
-            [rsm], [region], [sr], [asm], [dispatch_date]
-        FROM [silver].[Hatch_NPS_Report]
-        WHERE created_date IS NOT NULL
+        SELECT  [id]
+      ,[customer]
+      ,[country]
+      ,[created_date]
+      ,[Rating]
+      ,[Reason]
+      ,[Sr_Name]
+      ,[ASM]
+      ,[RSM]
+      ,[Region_Name]
+      ,[dispatch_date]
+       FROM [silver].[Hatch_NPS_Report]
+       WHERE created_date IS NOT NULL
         """
 
         with conn:
