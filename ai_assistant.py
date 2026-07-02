@@ -24,7 +24,7 @@ import os
 import pandas as pd
 import streamlit as st
 
-MODEL = "claude-sonnet-4-6"      # strong answers; use "claude-haiku-4-5" to cut cost
+MODEL = "claude-haiku-4-5"       # fast + low cost; use "claude-sonnet-4-6" for deeper answers
 MAX_TOKENS = 1000
 MAX_HISTORY = 12                  # keep the last N chat turns
 
