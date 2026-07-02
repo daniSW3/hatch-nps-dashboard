@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 from db import load_data
+from ai_assistant import render_ai_assistant
 
 st.set_page_config(page_title="NPS Dashboard — Multi-Market", layout="wide", page_icon="📊")
 
@@ -455,6 +456,13 @@ with tab_pas:
 with tab_det:
     st.markdown(reason_matrix('Detractor', 'rpill-det', 'DETRACTOR REASONS', RED_LT, "198,40,40"), unsafe_allow_html=True)
     reason_drill_buttons('Detractor')
+
+# ====================== AI ASSISTANT ======================
+# Chat panel that answers questions about the data currently on screen.
+# It receives filtered_df, so answers always respect the active filters.
+st.markdown("")
+st.markdown("---")
+render_ai_assistant(filtered_df)
 
 # ====================== FOOTER ======================
 st.markdown('<div class="hatch-footer">'
