@@ -157,15 +157,20 @@ selected_countries = st.sidebar.multiselect("Markets", countries, default=countr
 if selected_countries:
     base = base[base['country'].isin(selected_countries)]
 
-regions = sorted([r for r in base['region'].dropna().unique() if str(r) != ""])
-selected_regions = st.sidebar.multiselect("Regions", regions, default=regions)
-if selected_regions:
-    base = base[base['region'].isin(selected_regions)]
-
 filtered_df = base
 if len(filtered_df) == 0:
     st.error("No data for selected filters.")
     st.stop()
+
+# ---- comparison dimension: by country normally, by RSM when ONE market selected ----
+single_country = len(selected_countries) == 1
+RSM_COL = _MODAL_SRC.get("RSM") or "RSM"
+DIM = RSM_COL if (single_country and RSM_COL in filtered_df.columns) else 'country'
+DIM_NAME = "RSM" if DIM != 'country' else "Market"
+def dim_label(v):
+    return flag(v) if DIM == 'country' else str(v)
+def order_dims(vals):
+    return order_countries(vals) if DIM == 'country' else sorted(str(v) for v in vals)
 
 # ====================== KPI CARDS ======================
 total = len(filtered_df)
@@ -194,7 +199,7 @@ st.markdown("")
 left, right = st.columns([6, 4])
 
 with left:
-    st.subheader("Country comparison")
+    st.subheader("RSM comparison" if DIM != 'country' else "Country comparison")
     if mode == "Weeks":
         periods = sorted(filtered_df['week'].unique())
     else:
@@ -204,7 +209,7 @@ with left:
         f'<div style="color:#888780;font-size:12px;margin:-6px 0 10px;">'
         f'{len(filtered_df):,} calls · {period_txt}</div>',
         unsafe_allow_html=True)
-    country_stats = filtered_df.groupby('country').agg(
+    country_stats = filtered_df.groupby(DIM).agg(
         Promoters=('NPS_Group', lambda x: (x == 'Promoter').sum()),
         Passives=('NPS_Group', lambda x: (x == 'Passive').sum()),
         Detractors=('NPS_Group', lambda x: (x == 'Detractor').sum()),
@@ -228,7 +233,7 @@ with left:
     rows = []
     for _, r in country_stats.iterrows():
         rows.append(
-            f'<tr><td class="name">{flag(r["country"])}</td>'
+            f'<tr><td class="name">{dim_label(r[DIM])}</td>'
             + cell(r['Promoters'], r['Total'], GREEN_LT)
             + cell(r['Passives'],  r['Total'], GREY_LT)
             + cell(r['Detractors'],r['Total'], RED_LT)
@@ -237,10 +242,11 @@ with left:
     tp, tpa, td_, tt = (country_stats['Promoters'].sum(), country_stats['Passives'].sum(),
                         country_stats['Detractors'].sum(), country_stats['Total'].sum())
     tnps = round(tp / tt * 100 - td_ / tt * 100, 0) if tt else 0
-    rows.append('<tr class="totals"><td class="name">Hatch</td>'
+    total_label = flag(selected_countries[0]) if single_country else 'Hatch'
+    rows.append(f'<tr class="totals"><td class="name">{total_label}</td>'
                 + cell(tp, tt, GREEN_LT) + cell(tpa, tt, GREY_LT) + cell(td_, tt, RED_LT)
                 + f'<td class="num">{badge(tnps)}</td></tr>')
-    st.markdown('<table class="htbl"><tr><th>Market</th>'
+    st.markdown(f'<table class="htbl"><tr><th>{DIM_NAME}</th>'
                 '<th class="num">Promoters</th><th class="num">Passives</th>'
                 '<th class="num">Detractors</th><th class="num">NPS</th></tr>'
                 + "".join(rows) + '</table>', unsafe_allow_html=True)
@@ -272,23 +278,28 @@ with right:
 
 st.markdown("")
 
-# ====================== WoW CHART ======================
-st.subheader("NPS Movement — Week on Week")
+# ====================== TREND CHART (follows the Weeks / Months view mode) ======================
+period_col = 'week' if mode == "Weeks" else 'month'
+st.subheader(f"NPS Movement — {'Week on Week' if mode == 'Weeks' else 'Month on Month'}")
 _wow = filtered_df.copy()
 _wow['is_prom'] = (_wow['NPS_Group'] == 'Promoter').astype(int)
 _wow['is_det'] = (_wow['NPS_Group'] == 'Detractor').astype(int)
-weekly_nps = _wow.groupby(['week', 'country'], as_index=False).agg(
+trend_nps = _wow.groupby([period_col, 'country'], as_index=False).agg(
     prom=('is_prom', 'sum'), det=('is_det', 'sum'), tot=('NPS_Group', 'count'))
-weekly_nps['NPS'] = ((weekly_nps['prom'] / weekly_nps['tot']
-                      - weekly_nps['det'] / weekly_nps['tot']) * 100).round(1)
-weekly_nps = weekly_nps.sort_values('week')
-fig_wow = px.line(weekly_nps, x='week', y='NPS', color='country', markers=True, height=480)
+trend_nps['NPS'] = ((trend_nps['prom'] / trend_nps['tot']
+                     - trend_nps['det'] / trend_nps['tot']) * 100).round(1)
+# chronological order ('May-26' style month labels don't sort alphabetically)
+period_order = filtered_df.sort_values('created_date')[period_col].unique().tolist()
+trend_nps[period_col] = pd.Categorical(trend_nps[period_col], categories=period_order, ordered=True)
+trend_nps = trend_nps.sort_values(period_col)
+fig_wow = px.line(trend_nps, x=period_col, y='NPS', color='country', markers=True, height=480)
 fig_wow.update_layout(
     template='plotly_dark',
     paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
     font=dict(color='#dddbd4'),
     legend=dict(orientation='h', y=1.08, title=None),
-    xaxis=dict(gridcolor='#2e2e2b', title=None),
+    xaxis=dict(gridcolor='#2e2e2b', title=None,
+               categoryorder='array', categoryarray=period_order),
     yaxis=dict(gridcolor='#2e2e2b', title='NPS'),
     margin=dict(t=30, b=10),
 )
@@ -375,87 +386,111 @@ if _dialog is not None:
         st.dataframe(disp, use_container_width=True, hide_index=True, height=460)
 
         if st.button("Close", key=f"m_close_{group}_{reason}"):
+            st.session_state[f"mat_nonce_{group}"] = st.session_state.get(f"mat_nonce_{group}", 0) + 1
+            st.session_state.pop(f"mat_handled_{group}", None)
             st.rerun()
 else:
     show_records = None  # very old Streamlit
 
-# ====================== REASONS ANALYSIS (country matrix) ======================
+# ====================== REASONS ANALYSIS (clickable matrix) ======================
 st.subheader("Reasons Analysis")
 
-def heat(color_rgb, pct):
-    a = min(pct / 50, 1) * 0.40
-    return f'background:rgba({color_rgb},{a:.3f});'
+GROUP_RGB = {'Promoter': "46,125,50", 'Passive': "120,120,116", 'Detractor': "198,40,40"}
+GROUP_TXT = {'Promoter': GREEN_LT, 'Passive': GREY_LT, 'Detractor': RED_LT}
 
-def _reason_counts(group):
-    g = filtered_df[filtered_df['NPS_Group'] == group]
-    ex = g['Reason'].dropna().str.split(',').explode().str.strip()
-    ex = ex[ex != '']
-    return ex.value_counts()
-
-def reason_matrix(group, pill_cls, label, color_lt, color_rgb):
+def _reason_pivot(group):
+    """Reason x country count pivot for a group, sorted by total desc."""
     g = filtered_df[filtered_df['NPS_Group'] == group].copy()
-    cs = order_countries(g['country'].dropna().unique())
-
-    ex = g[['country', 'Reason']].copy()
+    cs = order_dims(g[DIM].dropna().unique())
+    ex = g[[DIM, 'Reason']].copy()
     ex['Reason'] = ex['Reason'].str.split(',')
     ex = ex.explode('Reason')
     ex['Reason'] = ex['Reason'].str.strip()
     ex = ex[ex['Reason'].notna() & (ex['Reason'] != '')]
-
-    pivot = ex.pivot_table(index='Reason', columns='country', values=None,
+    pivot = ex.pivot_table(index='Reason', columns=DIM, values=None,
                            aggfunc='size', fill_value=0)
     if pivot.empty:
-        return f'<span class="rpill {pill_cls}">{label}</span><div style="color:#888;font-size:13px">No data.</div>'
+        return None, cs
+    for c in cs:
+        if c not in pivot.columns:
+            pivot[c] = 0
+    pivot = pivot[cs]
     pivot['__total__'] = pivot.sum(axis=1)
     pivot = pivot.sort_values('__total__', ascending=False)
+    return pivot, cs
+
+def reason_matrix_clickable(group, pill_cls, label):
+    """Interactive reasons matrix: click a row to open the records modal."""
+    st.markdown(f'<span class="rpill {pill_cls}">{label}</span>', unsafe_allow_html=True)
+    pivot, cs = _reason_pivot(group)
+    if pivot is None:
+        st.markdown('<div style="color:#888;font-size:13px">No data.</div>',
+                    unsafe_allow_html=True)
+        return
 
     col_totals = pivot.sum(axis=0)
     hatch_total = col_totals['__total__']
+    rgb, txt_color = GROUP_RGB[group], GROUP_TXT[group]
 
-    head = '<th>Reason</th><th>Hatch Total</th>' + "".join(f'<th>{flag(c)}</th>' for c in cs)
-    body = ""
-    for reason, r in pivot.iterrows():
-        cnt_t = int(r['__total__']); p_t = cnt_t / hatch_total * 100 if hatch_total else 0
-        cells = (f'<td style="{heat(color_rgb,p_t)}"><span class="pct" style="color:{color_lt}">{p_t:.0f}%</span>'
-                 f'<span class="cnt">({cnt_t:,})</span></td>')
-        for c in cs:
-            cnt = int(r.get(c, 0)); denom = col_totals.get(c, 0)
-            if cnt == 0:
-                cells += '<td></td>'; continue
-            p = cnt / denom * 100 if denom else 0
-            cells += (f'<td style="{heat(color_rgb,p)}"><span class="pct" style="color:{color_lt}">{p:.0f}%</span>'
-                      f'<span class="cnt">({cnt:,})</span></td>')
-        body += f'<tr><td>{reason}</td>{cells}</tr>'
-    return (f'<span class="rpill {pill_cls}">{label}</span>'
-            f'<table class="mtbl"><tr>{head}</tr>{body}</table>')
+    # display strings + parallel % matrix for heat shading
+    disp = pd.DataFrame(index=pivot.index)
+    pcts = pd.DataFrame(index=pivot.index)
+    t = pivot['__total__']
+    total_col = f"{selected_countries[0]} Total" if single_country else "Hatch Total"
+    disp[total_col] = [f"{v/hatch_total*100:.0f}% ({v:,})" if v else "" for v in t]
+    pcts[total_col] = [v/hatch_total*100 if hatch_total else 0 for v in t]
+    for c in cs:
+        denom = col_totals.get(c, 0)
+        disp[dim_label(c)] = [f"{v/denom*100:.0f}% ({v:,})" if v else "" for v in pivot[c]]
+        pcts[dim_label(c)] = [v/denom*100 if denom else 0 for v in pivot[c]]
+    disp.insert(0, 'Reason', pivot.index)
+    pcts.insert(0, 'Reason', 0.0)
 
-def reason_drill_buttons(group):
-    counts = _reason_counts(group)
-    if show_records is None:
-        st.info("Drill-down needs Streamlit ≥ 1.31 (st.dialog). Please upgrade streamlit.")
-        return
-    if counts.empty:
-        return
-    st.markdown('<div class="drill-hint">🔍 Click a reason to see the individual records behind it</div>',
-                unsafe_allow_html=True)
-    reasons = list(counts.index)
-    ncols = 3
-    cols = st.columns(ncols)
-    for i, reason in enumerate(reasons):
-        label = f"{reason}  ({int(counts[reason]):,})"
-        if cols[i % ncols].button(label, key=f"drill_{group}_{i}", use_container_width=True):
-            show_records(reason, group)
+    def _css(_):
+        css = pd.DataFrame('', index=disp.index, columns=disp.columns)
+        for col in disp.columns:
+            if col == 'Reason':
+                css[col] = 'font-weight:700;'
+                continue
+            for i in disp.index:
+                if disp.at[i, col]:
+                    a = min(pcts.at[i, col] / 50, 1) * 0.40
+                    css.at[i, col] = (f'background-color: rgba({rgb},{a:.3f});'
+                                      f'color:{txt_color}; font-weight:700;')
+        return css
+
+    styled = disp.style.apply(_css, axis=None)
+
+    st.markdown('<div class="drill-hint">🔍 Click a reason row to see the '
+                'individual records behind it</div>', unsafe_allow_html=True)
+
+    nonce = st.session_state.get(f"mat_nonce_{group}", 0)
+    height = min(38 + 35 * len(disp), 460)
+    event = st.dataframe(
+        styled,
+        key=f"mat_{group}_{nonce}",
+        on_select="rerun",
+        selection_mode="single-row",
+        hide_index=True,
+        use_container_width=True,
+        height=height,
+    )
+    rows = list(event.selection.rows) if event is not None else []
+    if rows and show_records is not None:
+        sel = rows[0]
+        if st.session_state.get(f"mat_handled_{group}") != (nonce, sel):
+            st.session_state[f"mat_handled_{group}"] = (nonce, sel)
+            show_records(pivot.index[sel], group)
+    elif rows and show_records is None:
+        st.info("Drill-down needs Streamlit ≥ 1.35. Please upgrade streamlit.")
 
 tab_pro, tab_pas, tab_det = st.tabs(["Promoter Reasons", "Passive Reasons", "Detractor Reasons"])
 with tab_pro:
-    st.markdown(reason_matrix('Promoter', 'rpill-pro', 'PROMOTER REASONS', GREEN_LT, "46,125,50"), unsafe_allow_html=True)
-    reason_drill_buttons('Promoter')
+    reason_matrix_clickable('Promoter', 'rpill-pro', 'PROMOTER REASONS')
 with tab_pas:
-    st.markdown(reason_matrix('Passive', 'rpill-pas', 'PASSIVE REASONS', GREY_LT, "120,120,116"), unsafe_allow_html=True)
-    reason_drill_buttons('Passive')
+    reason_matrix_clickable('Passive', 'rpill-pas', 'PASSIVE REASONS')
 with tab_det:
-    st.markdown(reason_matrix('Detractor', 'rpill-det', 'DETRACTOR REASONS', RED_LT, "198,40,40"), unsafe_allow_html=True)
-    reason_drill_buttons('Detractor')
+    reason_matrix_clickable('Detractor', 'rpill-det', 'DETRACTOR REASONS')
 
 # ====================== AI ASSISTANT ======================
 # Chat panel that answers questions about the data currently on screen.
