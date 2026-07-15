@@ -24,7 +24,7 @@ import os
 import pandas as pd
 import streamlit as st
 
-MODEL = "claude-haiku-4-5"       # fast + low cost; use "claude-sonnet-4-6" for deeper answers
+MODEL = "claude-sonnet-5"     # fast + low cost; use "claude-sonnet-4-6" for deeper answers
 MAX_TOKENS = 1000
 MAX_HISTORY = 12                  # keep the last N chat turns
 
@@ -161,7 +161,7 @@ def render_ai_assistant(filtered_df: pd.DataFrame):
         with st.chat_message(m["role"]):
             st.markdown(m["content"])
 
-    question = st.chat_input("e.g. Why is Kenya's NPS below target this month?")
+    question = st.chat_input("e.g. What's driving detractors in Ethiopia?")
     if not question:
         return
 
