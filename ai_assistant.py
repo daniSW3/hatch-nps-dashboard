@@ -233,9 +233,7 @@ def render_ai_assistant(filtered_df: pd.DataFrame):
     st.subheader("💬 Ask the data")
     st.markdown(
         '<div style="color:#888780;font-size:12px;margin:-6px 0 10px;">'
-        'Answers are based on the data currently selected in your filters. '
-        'You can ask for breakdowns by week, month, market, region, RSM, ASM, '
-        'NPS group or reason.</div>',
+        'Answers are based on the data currently selected in your filters.</div>',
         unsafe_allow_html=True)
 
     api_key = _get_key()
