@@ -1,0 +1,34 @@
+name: Keep Streamlit App Awake
+
+# Runs on a schedule + lets you trigger it manually from the Actions tab
+on:
+  schedule:
+    # Every 6 hours (UTC). Adjust the cron below if you want a different cadence.
+    - cron: "0 */6 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping the Streamlit app
+        run: |
+          set -e
+          URL="${{ secrets.STREAMLIT_APP_URL }}"
+          if [ -z "$URL" ]; then
+            echo "ERROR: STREAMLIT_APP_URL secret is not set. Add it in Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+          echo "Pinging $URL ..."
+          # Streamlit apps often show an intermediate 'wake up' screen on first hit,
+          # so we retry a couple of times a few seconds apart.
+          for i in 1 2 3; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" -L --max-time 30 "$URL")
+            echo "Attempt $i: HTTP $code"
+            if [ "$code" = "200" ]; then
+              echo "App is awake."
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "App did not return 200 after 3 attempts (it may still be waking up)."
