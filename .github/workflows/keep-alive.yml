@@ -1,9 +1,7 @@
 name: Keep Streamlit App Awake
 
-# Runs on a schedule + lets you trigger it manually from the Actions tab
 on:
   schedule:
-    # Every 6 hours (UTC). Adjust the cron below if you want a different cadence.
     - cron: "0 */6 * * *"
   workflow_dispatch: {}
 
@@ -13,22 +11,33 @@ jobs:
     steps:
       - name: Ping the Streamlit app
         run: |
-          set -e
           URL="${{ secrets.STREAMLIT_APP_URL }}"
           if [ -z "$URL" ]; then
             echo "ERROR: STREAMLIT_APP_URL secret is not set. Add it in Settings > Secrets and variables > Actions."
             exit 1
           fi
           echo "Pinging $URL ..."
-          # Streamlit apps often show an intermediate 'wake up' screen on first hit,
-          # so we retry a couple of times a few seconds apart.
+
+          success=0
           for i in 1 2 3; do
-            code=$(curl -s -o /dev/null -w "%{http_code}" -L --max-time 30 "$URL")
-            echo "Attempt $i: HTTP $code"
+            # Don't let a single failed curl kill the script (no 'set -e' here);
+            # cap redirects so a loop can't spin forever; capture curl's own
+            # exit code separately from the HTTP status code.
+            code=$(curl -s -o /dev/null -w "%{http_code}" -L --max-redirs 10 --max-time 30 "$URL") || curl_exit=$?
+            echo "Attempt $i: HTTP ${code:-<none>} (curl exit ${curl_exit:-0})"
+            unset curl_exit
+
             if [ "$code" = "200" ]; then
               echo "App is awake."
-              exit 0
+              success=1
+              break
             fi
-            sleep 10
+            sleep 15
           done
-          echo "App did not return 200 after 3 attempts (it may still be waking up)."
+
+          if [ "$success" != "1" ]; then
+            echo "App did not return 200 after 3 attempts. It may still be waking up, or the URL/redirect needs a look."
+            # Don't fail the whole workflow over a slow cold-start; comment the next line back in
+            # once you've confirmed the URL is correct, if you want failures to be visible in Actions.
+            exit 0
+          fi
