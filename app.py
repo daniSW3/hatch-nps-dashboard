@@ -1,7 +1,10 @@
+import html
+
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from db import load_data
+from db import (load_data, build_followup_feedback, followup_for_reason,
+                followup_column_for_reason, clean_feedback)
 from ai_assistant import render_ai_assistant
 
 st.set_page_config(page_title="NPS Dashboard — Multi-Market", layout="wide", page_icon="📊")
@@ -325,7 +328,8 @@ def _drill_frame(reason, group):
         lambda s: reason in [x.strip() for x in str(s).split(',')])
     return g[mask]
 
-def _build_display(sub):
+def _build_display(sub, reason=None):
+    """Modal table for `sub`; when `reason` has a follow-up question, append its answers."""
     out = pd.DataFrame()
     for label in MODAL_COLS:
         if label == "Score":
@@ -341,6 +345,9 @@ def _build_display(sub):
                 out[label] = col.fillna('') if hasattr(col, 'fillna') else col
             else:
                 out[label] = ""
+    fcol = followup_column_for_reason(reason) if reason else None
+    if fcol and fcol in sub.columns:
+        out["Follow-up feedback"] = sub[fcol].map(clean_feedback)
     return out.reset_index(drop=True)
 
 # stable dialog API where available; fall back to the experimental one
@@ -382,7 +389,7 @@ if _dialog is not None:
 
         st.caption(f"{len(view):,} record{'s' if len(view) != 1 else ''} shown")
 
-        disp = _build_display(view)
+        disp = _build_display(view, reason)
         st.dataframe(disp, use_container_width=True, hide_index=True, height=460)
 
         if st.button("Close", key=f"m_close_{group}_{reason}"):
@@ -418,6 +425,74 @@ def _reason_pivot(group):
     pivot['__total__'] = pivot.sum(axis=1)
     pivot = pivot.sort_values('__total__', ascending=False)
     return pivot, cs
+
+# ---- follow-up questions: melted once, then shown under the reason they belong to ----
+# Six reasons carry a "tell us more" question, each answered into its own sparse
+# column; build_followup_feedback melts them into one Follow_Up_Feedback field
+# linked to the reason the customer actually selected.
+fb_long = build_followup_feedback(filtered_df, groups=("Detractor",))
+
+def _followup_table(ans, cs, group):
+    """Answer x market (or RSM) table for one follow-up, styled like the matrix above."""
+    rgb, txt_color = GROUP_RGB[group], GROUP_TXT[group]
+    counts = ans.groupby(['Follow_Up_Feedback', DIM]).size().unstack(fill_value=0)
+    for c in cs:
+        if c not in counts.columns:
+            counts[c] = 0
+    counts = counts[list(cs)]
+    counts['__total__'] = counts.sum(axis=1)
+    counts = counts.sort_values('__total__', ascending=False)
+    col_totals = counts.sum(axis=0)
+
+    total_col = f"{selected_countries[0]} Total" if single_country else "Hatch Total"
+    head = "".join(f'<th class="num">{dim_label(c)}</th>' for c in cs)
+    body = []
+    for answer, r in counts.iterrows():
+        cells = ""
+        for key in ['__total__'] + list(cs):
+            v, denom = int(r[key]), int(col_totals[key])
+            if v and denom:
+                p = v / denom * 100
+                a = min(p / 50, 1) * 0.40
+                cells += (f'<td class="num" style="background-color:rgba({rgb},{a:.3f});'
+                          f'color:{txt_color};font-weight:700">{p:.0f}%'
+                          f'<span class="cnt">({v:,})</span></td>')
+            else:
+                cells += '<td class="num"></td>'
+        body.append(f'<tr><td class="name">{html.escape(str(answer))}</td>{cells}</tr>')
+    return (f'<table class="htbl"><tr><th>Answer</th>'
+            f'<th class="num">{total_col}</th>{head}</tr>{"".join(body)}</table>')
+
+def _followup_sections(group, pivot, cs):
+    """One expander per reason that asks a follow-up question, in matrix order.
+
+    The survey only asks these questions of detractors, so the promoter and
+    passive matrices get none - their lookalike reason wording ("DOC quality")
+    is a different, neutral reason.
+    """
+    if group != 'Detractor':
+        return
+    shown = 0
+    for reason in pivot.index:
+        info = followup_for_reason(reason)
+        if not info:
+            continue
+        # the matrix pivot drops responses with no value for the comparison
+        # dimension, so scope the answers the same way or the rate can exceed 100%
+        ans = fb_long[(fb_long['Reason_Selected'] == reason) & fb_long[DIM].notna()]
+        if ans.empty:
+            continue
+        if not shown:
+            st.markdown('<div class="drill-hint">💬 Follow-up questions — open one '
+                        'to see what detractors answered for that reason</div>',
+                        unsafe_allow_html=True)
+        shown += 1
+        mentions = int(pivot.at[reason, '__total__'])
+        rate = len(ans) / mentions * 100 if mentions else 0
+        with st.expander(f"{reason}  ·  {info['question']}"
+                         f"   ({len(ans):,} of {mentions:,} answered · {rate:.0f}%)"):
+            st.markdown(_followup_table(ans, cs, group), unsafe_allow_html=True)
+
 
 def reason_matrix_clickable(group, pill_cls, label):
     """Interactive reasons matrix: click a row to open the records modal."""
@@ -483,6 +558,8 @@ def reason_matrix_clickable(group, pill_cls, label):
             show_records(pivot.index[sel], group)
     elif rows and show_records is None:
         st.info("Drill-down needs Streamlit ≥ 1.35. Please upgrade streamlit.")
+
+    _followup_sections(group, pivot, cs)
 
 tab_pro, tab_pas, tab_det = st.tabs(["Promoter Reasons", "Passive Reasons", "Detractor Reasons"])
 with tab_pro:
