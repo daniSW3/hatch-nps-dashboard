@@ -244,7 +244,7 @@ def load_data():
 
         # Data processing (unchanged)
         df['created_date'] = pd.to_datetime(df['created_date'], errors='coerce')
-        df['week'] = 'W' + df['created_date'].dt.strftime('%U')
+        df['week'] = df['created_date'].dt.strftime('%G-W-%V')   # ISO week
         df['month'] = df['created_date'].dt.strftime('%Y-%m')
 
         def get_nps_group(rating):

@@ -115,7 +115,10 @@ _MODAL_SRC = {
 
 # ====================== DERIVED PERIOD FIELDS ======================
 df['created_date'] = pd.to_datetime(df['created_date'], errors='coerce')
-df['week'] = df['created_date'].dt.strftime('%Y-W-%U')
+# ISO week (%G-%V), to match SQL Server DATEPART(ISO_WEEK) and the other
+# dashboards. %U was one lower all year (it is 0-based and Sunday-start),
+# which made every week here read a week behind theirs.
+df['week'] = df['created_date'].dt.strftime('%G-W-%V')
 df['month'] = df['created_date'].dt.strftime('%b-%y')
 df['year'] = df['created_date'].dt.year
 
