@@ -412,11 +412,18 @@ def _reason_pivot(group):
     """Reason x country count pivot for a group, sorted by total desc."""
     g = filtered_df[filtered_df['NPS_Group'] == group].copy()
     cs = order_dims(g[DIM].dropna().unique())
-    ex = g[[DIM, 'Reason']].copy()
-    ex['Reason'] = ex['Reason'].str.split(',')
+    # Drop blank reasons BEFORE splitting. When every response in the slice has
+    # no reason - passives since W-44 - split+explode yields an all-NaN float
+    # column and the .str accessor below raises AttributeError.
+    ex = g[[DIM, 'Reason']].dropna(subset=['Reason']).copy()
+    if ex.empty:
+        return None, cs
+    ex['Reason'] = ex['Reason'].astype(str).str.split(',')
     ex = ex.explode('Reason')
-    ex['Reason'] = ex['Reason'].str.strip()
-    ex = ex[ex['Reason'].notna() & (ex['Reason'] != '')]
+    ex['Reason'] = ex['Reason'].astype(str).str.strip()
+    ex = ex[ex['Reason'] != '']
+    if ex.empty:
+        return None, cs
     pivot = ex.pivot_table(index='Reason', columns=DIM, values=None,
                            aggfunc='size', fill_value=0)
     if pivot.empty:
@@ -502,8 +509,8 @@ def reason_matrix_clickable(group, pill_cls, label):
     st.markdown(f'<span class="rpill {pill_cls}">{label}</span>', unsafe_allow_html=True)
     pivot, cs = _reason_pivot(group)
     if pivot is None:
-        st.markdown('<div style="color:#888;font-size:13px">No data.</div>',
-                    unsafe_allow_html=True)
+        st.markdown('<div style="color:#888;font-size:13px">No reasons recorded '
+                    'for this selection.</div>', unsafe_allow_html=True)
         return
 
     col_totals = pivot.sum(axis=0)
